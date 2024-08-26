@@ -10,14 +10,12 @@ IVIPApi* g_pVIPCore = nullptr;
 IVEngineServer2* engine = nullptr;
 CGameEntitySystem* g_pGameEntitySystem = nullptr;
 CEntitySystem* g_pEntitySystem = nullptr;
-IPlayersApi* g_pPlayers = nullptr;
 
 bool g_bCanHeal[64];
 float fEffectTime = 1.2f;
 
-char g_szWeaponBlackList[1024] = "weapon_molotov;weapon_hegrenade;";
-int g_iMaxHP = 100;
-int g_iMaxShotHP = 50;
+const char* g_szWeaponBlackList = "weapon_molotov;weapon_hegrenade;";
+int g_iMaxShotHP;
 
 bool g_bSyringeEffectEnabled = true;
 
@@ -34,7 +32,7 @@ bool HealModule::Load(PluginId id, ISmmAPI* ismm, char* error, size_t maxlen, bo
 
     {
         KeyValues* pKV = new KeyValues("VIP_Teammates_Heal");
-        const char* pszPath = "addons/configs/vip_teammates_heal.ini";
+        const char* pszPath = "addons/configs/vip/teammates_heal.ini";
 
         if (!pKV->LoadFromFile(g_pFullFileSystem, pszPath))
         {
@@ -44,9 +42,8 @@ bool HealModule::Load(PluginId id, ISmmAPI* ismm, char* error, size_t maxlen, bo
 
         g_bSyringeEffectEnabled = pKV->GetInt("syringe_effect", 1) != 0;
         fEffectTime = pKV->GetFloat("effect_time", 1.2f);
-        const char* blacklist = pKV->GetString("weapon_blacklist", "weapon_molotov;weapon_hegrenade;");
-        strncpy(g_szWeaponBlackList, blacklist, sizeof(g_szWeaponBlackList) - 1);
-
+        g_szWeaponBlackList = pKV->GetString("weapon_blacklist", "weapon_molotov;weapon_hegrenade;");
+        g_iMaxShotHP = pKV->GetInt("max_shot_hp", 50);
         delete pKV;
     }
 
@@ -63,7 +60,6 @@ bool HealModule::Unload(char* error, size_t maxlen)
 {
     delete g_pVIPCore;
     delete g_pUtils;
-    delete g_pPlayers;
     return true;
 }
 
@@ -74,13 +70,11 @@ CGameEntitySystem* GameEntitySystem()
 
 CBasePlayerWeapon* GetWeaponFromController(CCSPlayerController* pController) {
     if (!pController) return nullptr;
+    CBasePlayerPawn* pPlayerPawn = pController->GetPawn();
 
-    CHandle<CBasePlayerPawn> hPawn = pController->GetPawn()->GetHandle();
-    CBasePlayerPawn* pPawn = hPawn;
-
-    if (pPawn && pPawn->m_pWeaponServices) {
-        CHandle<CBasePlayerWeapon> hWeapon = pPawn->m_pWeaponServices->m_hActiveWeapon;
-        return hWeapon;
+    if (pPlayerPawn && pPlayerPawn->m_pWeaponServices) {
+        CBasePlayerWeapon* hWeapon = pPlayerPawn->m_pWeaponServices()->m_hActiveWeapon();
+        if (hWeapon) return hWeapon;
     }
 
     return nullptr;
@@ -99,42 +93,31 @@ void ApplySyringeEffect(CCSPlayerController* pVictimController)
 
 bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
 {
-    if (pInfo.m_bitsDamageType & DMG_FALL) {
-        return true;
-    }
+    if (pInfo.m_bitsDamageType & DMG_FALL) return true;
 
     CCSPlayerPawn* pAttackerPawn = (CCSPlayerPawn*)pInfo.m_hAttacker.Get();
-    if (!pAttackerPawn) {
-        return true;
-    }
+    if (!pAttackerPawn) return true;
 
     int iAttackerSlot = pAttackerPawn->m_hController()->GetEntityIndex().Get() - 1;
-    if (iAttackerSlot == -1) {
-        return true;
-    }
+    if (iAttackerSlot == -1) return true;
 
-    if (iVictimSlot == iAttackerSlot) {
-        return true;
-    }
+    if (iVictimSlot == iAttackerSlot) return true;
 
     CCSPlayerController* pVictimController = CCSPlayerController::FromSlot(iVictimSlot);
     CCSPlayerController* pAttackerController = CCSPlayerController::FromSlot(iAttackerSlot);
 
-    if (!pVictimController || !pAttackerController) {
-        return true;
-    }
-
-    int iVictimTeam = pVictimController->m_iTeamNum();
-    int iAttackerTeam = pAttackerController->m_iTeamNum();
+    if (!pVictimController || !pAttackerController) return true;
+    CCSPlayerPawn* pVictimPawn = pVictimController->GetPlayerPawn();
+    if (!pVictimPawn) return true;
+    int iVictimTeam = pVictimPawn->m_iTeamNum();
+    int iAttackerTeam = pAttackerPawn->m_iTeamNum();
     float iDamage = pInfo.m_flDamage;
 
-    if (!g_bCanHeal[iAttackerSlot]) {
-        return true;
-    }
+    if (!g_bCanHeal[iAttackerSlot]) return true;
 
     if (iVictimTeam == iAttackerTeam) {
-        int iHealth = pVictimController->m_iPawnHealth();
-        int iMaxHealth = g_iMaxHP;
+        int iHealth = pVictimPawn->m_iHealth();
+        int iMaxHealth = pVictimPawn->m_iMaxHealth();
 
         CBasePlayerWeapon* pWeapon = GetWeaponFromController(pAttackerController);
         if (pWeapon) {
@@ -153,9 +136,8 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
                         iHealth = iMaxHealth;
                     }
 
-                    pVictimController->m_hPlayerPawn()->m_iMaxHealth() = iMaxHealth;
-                    pVictimController->m_hPlayerPawn()->m_iHealth() = iHealth;
-
+                    pVictimPawn->m_iHealth() = iHealth;
+                    g_pUtils->SetStateChanged(pVictimPawn, "CBaseEntity", "m_iHealth");
                     ApplySyringeEffect(pVictimController);
                 }
             }
@@ -165,19 +147,15 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
     return true;
 }
 
-void OnClientAuthorized(int iSlot, uint64 iSteamID64)
+void OnClientAuthorized(int iSlot, bool bIsVIP)
 {
-    g_pUtils->NextFrame([iSlot]() {
-        g_bCanHeal[iSlot] = g_pVIPCore->VIP_GetClientFeatureBool(iSlot, "heal_teammates");
-        });
+    if(!bIsVIP) return;
+    g_bCanHeal[iSlot] = g_pVIPCore->VIP_GetClientFeatureBool(iSlot, "heal_teammates");
 }
 
 bool OnToggle(int iSlot, const char* szFeature, VIP_ToggleState eOldStatus, VIP_ToggleState& eNewStatus)
 {
-    if (eNewStatus == ENABLED)
-        g_bCanHeal[iSlot] = true;
-    else
-        g_bCanHeal[iSlot] = false;
+    g_bCanHeal[iSlot] = (eNewStatus == ENABLED);
     return false;
 }
 
@@ -196,16 +174,6 @@ void HealModule::AllPluginsLoaded()
         return;
     }
 
-    g_pPlayers = (IPlayersApi*)g_SMAPI->MetaFactory(PLAYERS_INTERFACE, &ret, NULL);
-    if (ret == META_IFACE_FAILED)
-    {
-        g_SMAPI->Format(error, sizeof(error), "Missing Players system plugin");
-        ConColorMsg(Color(255, 0, 0, 255), "[%s] %s\n", GetLogTag(), error);
-        std::string sBuffer = "meta unload " + std::to_string(g_PLID);
-        engine->ServerCommand(sBuffer.c_str());
-        return;
-    }
-
     g_pVIPCore = (IVIPApi*)g_SMAPI->MetaFactory(VIP_INTERFACE, &ret, NULL);
     if (ret == META_IFACE_FAILED)
     {
@@ -217,7 +185,7 @@ void HealModule::AllPluginsLoaded()
 
     g_pVIPCore->VIP_RegisterFeature("heal_teammates", VIP_STRING, TOGGLABLE, nullptr, OnToggle);
     g_pUtils->StartupServer(g_PLID, OnStartupServer);
-    g_pPlayers->HookOnClientAuthorized(g_PLID, OnClientAuthorized);
+    g_pVIPCore->VIP_OnClientLoaded(OnClientAuthorized);
     g_pUtils->HookOnTakeDamagePre(g_PLID, OnTakeDamage);
 }
 
@@ -228,7 +196,7 @@ const char* HealModule::GetLicense()
 
 const char* HealModule::GetVersion()
 {
-    return "1.0";
+    return "1.1";
 }
 
 const char* HealModule::GetDate()
