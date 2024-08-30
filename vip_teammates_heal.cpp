@@ -99,7 +99,8 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
     if (!pAttackerPawn) return true;
 
     int iAttackerSlot = pAttackerPawn->m_hController()->GetEntityIndex().Get() - 1;
-    if (iAttackerSlot == -1) return true;
+
+    if (iAttackerSlot < 0 || iAttackerSlot > 63) return true;
 
     if (iVictimSlot == iAttackerSlot) return true;
 
@@ -107,8 +108,10 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
     CCSPlayerController* pAttackerController = CCSPlayerController::FromSlot(iAttackerSlot);
 
     if (!pVictimController || !pAttackerController) return true;
+
     CCSPlayerPawn* pVictimPawn = pVictimController->GetPlayerPawn();
     if (!pVictimPawn) return true;
+
     int iVictimTeam = pVictimPawn->m_iTeamNum();
     int iAttackerTeam = pAttackerPawn->m_iTeamNum();
     float iDamage = pInfo.m_flDamage;
@@ -149,7 +152,7 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
 
 void OnClientAuthorized(int iSlot, bool bIsVIP)
 {
-    if(!bIsVIP) return;
+    if (!bIsVIP) return;
     g_bCanHeal[iSlot] = g_pVIPCore->VIP_GetClientFeatureBool(iSlot, "heal_teammates");
 }
 
@@ -196,7 +199,7 @@ const char* HealModule::GetLicense()
 
 const char* HealModule::GetVersion()
 {
-    return "1.1";
+    return "1.2";
 }
 
 const char* HealModule::GetDate()
