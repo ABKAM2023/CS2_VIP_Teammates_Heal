@@ -14,7 +14,7 @@ CEntitySystem* g_pEntitySystem = nullptr;
 bool g_bCanHeal[64];
 float fEffectTime = 1.2f;
 
-const char* g_szWeaponBlackList = "weapon_molotov;weapon_hegrenade;";
+const char* g_szWeaponBlackList;
 int g_iMaxShotHP;
 
 bool g_bSyringeEffectEnabled = true;
@@ -44,7 +44,6 @@ bool HealModule::Load(PluginId id, ISmmAPI* ismm, char* error, size_t maxlen, bo
         fEffectTime = pKV->GetFloat("effect_time", 1.2f);
         g_szWeaponBlackList = pKV->GetString("weapon_blacklist", "weapon_molotov;weapon_hegrenade;");
         g_iMaxShotHP = pKV->GetInt("max_shot_hp", 50);
-        delete pKV;
     }
 
     return true;
@@ -97,7 +96,7 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
 
     CCSPlayerPawn* pAttackerPawn = (CCSPlayerPawn*)pInfo.m_hAttacker.Get();
     if (!pAttackerPawn) return true;
-
+    if (!pAttackerPawn->m_hController()) return true;
     int iAttackerSlot = pAttackerPawn->m_hController()->GetEntityIndex().Get() - 1;
 
     if (iAttackerSlot < 0 || iAttackerSlot > 63) return true;
@@ -124,11 +123,37 @@ bool OnTakeDamage(int iVictimSlot, CTakeDamageInfo& pInfo)
 
         CBasePlayerWeapon* pWeapon = GetWeaponFromController(pAttackerController);
         if (pWeapon) {
-            const char* szWeaponClassname = pWeapon->GetClassname();
-            if (strstr(g_szWeaponBlackList, szWeaponClassname) == nullptr) {
+            int DefIndex = pWeapon->m_AttributeManager().m_Item().m_iItemDefinitionIndex();
+            std::string pszClassName;
+
+            switch (DefIndex)
+            {
+                case 1:
+                    pszClassName = "weapon_deagle";
+                    break;
+                case 23:
+                    pszClassName = "weapon_mp5sd";
+                    break;
+                case 60:
+                    pszClassName = "weapon_m4a1_silencer";
+                    break;
+                case 61:
+                    pszClassName = "weapon_usp_silencer";
+                    break;
+                case 63:
+                    pszClassName = "weapon_cz75a";
+                    break;
+                case 64:
+                    pszClassName = "weapon_revolver";
+                    break;
+                default:
+                    pszClassName = pWeapon->GetClassname();
+                    break;
+            }
+            if (strstr(g_szWeaponBlackList, pszClassName.c_str()) == nullptr) {
                 if (iHealth < iMaxHealth) {
-                    const char* healPercentageStr = g_pVIPCore->VIP_GetClientFeatureString(iAttackerSlot, "heal_teammates");
-                    float healPercentage = atof(healPercentageStr) / 100.0f;
+                    int iPercent = g_pVIPCore->VIP_GetClientFeatureInt(iAttackerSlot, "heal_teammates");
+                    float healPercentage = (float)iPercent / 100.0f;
 
                     int iHealAmount = static_cast<int>(iDamage * healPercentage);
                     if (iHealAmount > g_iMaxShotHP) {
